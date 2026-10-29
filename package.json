@@ -2,7 +2,7 @@
   "name": "stacked-prs",
   "displayName": "Stacked PRs",
   "description": "View stacked pull requests as a tree, drag and drop to reorder them, with each branch living in its own git worktree.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -136,10 +136,27 @@
         "title": "Open All Changes",
         "icon": "$(diff-multiple)",
         "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.showMine",
+        "title": "Only My PRs",
+        "category": "Stacked PRs",
+        "toggled": "stackedPrs.scope == mine"
+      },
+      {
+        "command": "stackedPrs.showEveryone",
+        "title": "Everyone's PRs",
+        "category": "Stacked PRs",
+        "toggled": "stackedPrs.scope == everyone"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "submenu": "stackedPrs.scopeMenu",
+          "when": "view == stackedPrs.tree",
+          "group": "navigation@0"
+        },
         {
           "command": "stackedPrs.continueRestack",
           "when": "view == stackedPrs.tree && stackedPrs.pendingRestack",
@@ -159,7 +176,7 @@
       "view/item/context": [
         {
           "command": "stackedPrs.checkout",
-          "when": "view == stackedPrs.tree && viewItem =~ /^(branch|root)/ && viewItem !~ /current/",
+          "when": "view == stackedPrs.tree && viewItem =~ /^(branch|root)(?!.*current)/",
           "group": "0_checkout@1"
         },
         {
@@ -184,7 +201,7 @@
         },
         {
           "command": "stackedPrs.syncBase",
-          "when": "view == stackedPrs.tree && viewItem =~ /baseOutOfSync/",
+          "when": "view == stackedPrs.tree && viewItem =~ /^(?!.*foreign).*baseOutOfSync/",
           "group": "inline@4"
         },
         {
@@ -214,17 +231,17 @@
         },
         {
           "command": "stackedPrs.moveTo",
-          "when": "view == stackedPrs.tree && viewItem =~ /branch/",
+          "when": "view == stackedPrs.tree && viewItem =~ /^branch(?!.*foreign)/",
           "group": "2_stack@1"
         },
         {
           "command": "stackedPrs.restack",
-          "when": "view == stackedPrs.tree && viewItem =~ /branch/",
+          "when": "view == stackedPrs.tree && viewItem =~ /^branch(?!.*foreign)/",
           "group": "2_stack@2"
         },
         {
           "command": "stackedPrs.syncBase",
-          "when": "view == stackedPrs.tree && viewItem =~ /hasPr/",
+          "when": "view == stackedPrs.tree && viewItem =~ /^(?!.*foreign).*hasPr/",
           "group": "2_stack@3"
         },
         {
@@ -304,6 +321,16 @@
           "command": "stackedPrs.openAllChanges",
           "when": "false"
         }
+      ],
+      "stackedPrs.scopeMenu": [
+        {
+          "command": "stackedPrs.showMine",
+          "group": "1_scope@1"
+        },
+        {
+          "command": "stackedPrs.showEveryone",
+          "group": "1_scope@2"
+        }
       ]
     },
     "configuration": {
@@ -334,18 +361,33 @@
           "default": "ask",
           "description": "After a drag-and-drop reorder rebases branches: push them (--force-with-lease) and update PR bases on GitHub, keep the change local, or ask each time."
         },
-        "stackedPrs.prAuthor": {
-          "type": "string",
-          "default": "@me",
-          "description": "Only show PRs by this author (gh syntax). Empty = all open PRs."
-        },
         "stackedPrs.ghPath": {
           "type": "string",
           "default": "",
           "description": "Full path to the GitHub CLI (e.g. /opt/homebrew/bin/gh). Empty = auto-detect, including Homebrew locations and your login shell's PATH."
+        },
+        "stackedPrs.scope": {
+          "type": "string",
+          "enum": [
+            "mine",
+            "everyone"
+          ],
+          "enumDescriptions": [
+            "Only PRs you opened (plus any branch you have checked out locally)",
+            "Every open PR in the repo; other people's PRs are view-only"
+          ],
+          "default": "mine",
+          "description": "Which PRs to show. Also switchable from the filter button in the view's title bar."
         }
       }
-    }
+    },
+    "submenus": [
+      {
+        "id": "stackedPrs.scopeMenu",
+        "label": "Show PRs",
+        "icon": "$(filter)"
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p .",

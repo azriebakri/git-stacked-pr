@@ -8,6 +8,34 @@ export interface PrInfo {
   baseRefName: string;
   isDraft: boolean;
   reviewDecision?: string; // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | ''
+  author?: { login: string };
+  /** Opened by the signed-in GitHub user. */
+  mine?: boolean;
+}
+
+export type Scope = 'mine' | 'everyone';
+
+/** Someone else's PR: view only, never rebased or pushed by this extension. */
+export function isForeign(b: BranchInfo | undefined): boolean {
+  return !!b?.pr && !b.pr.mine;
+}
+
+/** Branches in a plan that belong to someone else (the plan must not run if non-empty). */
+export function foreignInPlan(plan: MovePlan, branches: Map<string, BranchInfo>): string[] {
+  return plan.restack.map(r => r.branch).filter(b => isForeign(branches.get(b)));
+}
+
+/** `root` plus its descendants, skipping (and not descending into) branches that fail `keep`. */
+export function ownSubtree(parents: ParentMap, root: string, keep: (b: string) => boolean): { own: string[]; skipped: string[] } {
+  const own: string[] = [];
+  const skipped: string[] = [];
+  const walk = (b: string) => {
+    if (!keep(b)) { skipped.push(b); return; }
+    own.push(b);
+    for (const c of childrenOf(parents, b)) walk(c);
+  };
+  walk(root);
+  return { own, skipped };
 }
 
 export interface BranchInfo {
@@ -104,7 +132,8 @@ export interface MovePlan {
  *  1. `moving` is lifted out of its stack; its children re-attach to its old parent.
  *  2. If `target` then has exactly one child, `moving` is inserted between them
  *     (target -> moving -> oldChild). This is the normal "reorder a linear stack" case.
- *     If target has zero or several children, `moving` just becomes a new child
+ *     If target has zero or several children (or its only child is someone else's PR),
+ *     `moving` just becomes a new child
  *     of target (a fork), and existing siblings are left alone.
  */
 export function planMove(
@@ -112,6 +141,8 @@ export function planMove(
   trunk: string,
   moving: string,
   target: string,
+  /** Branches that may be re-parented; a target's only child that may not is left alone (fork instead). */
+  canReparent: (b: string) => boolean = () => true,
 ): MovePlan {
   if (moving === trunk) throw new Error(`Can't move the trunk branch (${trunk}).`);
   if (moving === target) throw new Error('Drop target is the same branch.');
@@ -126,7 +157,7 @@ export function planMove(
 
   // 2. insert
   const targetKids = childrenOf(next, target);
-  if (targetKids.length === 1) next.set(targetKids[0], moving);
+  if (targetKids.length === 1 && canReparent(targetKids[0])) next.set(targetKids[0], moving);
   next.set(moving, target);
 
   return finishPlan(parents, next, trunk);

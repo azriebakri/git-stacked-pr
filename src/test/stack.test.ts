@@ -4,8 +4,9 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { planMove, planMoveSubtree, sanitize } from '../stack';
-import { Repo } from '../git';
+import { foreignInPlan, isForeign, ownSubtree, planMove, planMoveSubtree, sanitize } from '../stack';
+import type { BranchInfo } from '../stack';
+import { Repo, setGhPath, snapshot } from '../git';
 import { execute, Outcome, resolveSteps, resume } from '../restack';
 
 const pm = (o: Record<string, string>) => new Map(Object.entries(o));
@@ -224,4 +225,70 @@ test('e2e: PR file changes are relative to the parent in the stack, with renames
   // A PR with only its own single commit vs its parent
   const a = await repo.prChanges('A', 'main', 'origin');
   assert.deepEqual(a.files.map(f => `${f.status} ${f.path}`), ['A A.txt']);
+});
+
+
+// ---------- ownership guard ----------
+
+const info = (name: string, mine?: boolean): BranchInfo =>
+  mine === undefined ? { name } : { name, pr: { number: 1, title: name, url: '', headRefName: name, baseRefName: 'main', isDraft: false, mine, author: { login: mine ? 'me' : 'alice' } } };
+
+test('guard: dropping my PR onto a teammate PR forks instead of re-parenting their child', () => {
+  // main <- T (alice) <- T2 (alice);  M (mine) on main
+  const p = pm({ T: 'main', T2: 'T', M: 'main' });
+  const branches = new Map([['T', info('T', false)], ['T2', info('T2', false)], ['M', info('M', true)]]);
+  const plan = planMove(p, 'main', 'M', 'T', b => !isForeign(branches.get(b)));
+  assert.deepEqual(obj(plan.newParents), { M: 'T', T: 'main', T2: 'T' });
+  assert.deepEqual(foreignInPlan(plan, branches), []);
+});
+
+test('guard: moves that would rebase a teammate PR are flagged', () => {
+  // main <- M (mine) <- T (alice): moving M out from under T would rebase T
+  const p = pm({ M: 'main', T: 'M', X: 'main' });
+  const branches = new Map([['M', info('M', true)], ['T', info('T', false)], ['X', info('X', true)]]);
+  const plan = planMove(p, 'main', 'M', 'X', b => !isForeign(branches.get(b)));
+  assert.deepEqual(foreignInPlan(plan, branches), ['T']);
+  // local branches without a PR count as yours
+  assert.equal(isForeign(info('local')), false);
+});
+
+test('guard: restack skips teammate PRs and everything stacked on them', () => {
+  // M1 <- T (alice) <- M3 ;  M1 <- M2
+  const p = pm({ M1: 'main', T: 'M1', M3: 'T', M2: 'M1' });
+  const branches = new Map([['T', info('T', false)]]);
+  const r = ownSubtree(p, 'M1', b => !isForeign(branches.get(b)));
+  assert.deepEqual(r.own, ['M1', 'M2']);
+  assert.deepEqual(r.skipped, ['T']);
+});
+
+test('e2e: scope filter and ownership come from gh (fake gh)', async () => {
+  const { main } = makeRepo(); // local branches A, B, C with worktrees
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'gh-'));
+  const prs = [
+    { number: 1, title: 'A', url: 'u', headRefName: 'A', baseRefName: 'main', isDraft: false, author: { login: 'Me' } },
+    { number: 2, title: 'B', url: 'u', headRefName: 'B', baseRefName: 'A', isDraft: false, author: { login: 'alice' } },
+    { number: 3, title: 'X', url: 'u', headRefName: 'X', baseRefName: 'main', isDraft: false, author: { login: 'bob' } },
+    { number: 4, title: 'Y', url: 'u', headRefName: 'Y', baseRefName: 'main', isDraft: false, author: { login: 'me' } },
+  ];
+  const gh = path.join(bin, 'gh');
+  fs.writeFileSync(gh, `#!/bin/sh\nif [ "$1" = api ]; then echo me; else cat <<'EOF'\n${JSON.stringify(prs)}\nEOF\nfi\n`);
+  fs.chmodSync(gh, 0o755);
+  setGhPath(gh);
+  try {
+    const repo = (await Repo.open(main))!;
+    const mine = await snapshot(repo, { trunk: 'main', scope: 'mine' });
+    assert.equal(mine.ghError, undefined);
+    assert.equal(mine.viewerLogin, 'me');
+    // A (mine, case-insensitive), Y (mine, remote only), B and C (local worktrees); bob's X hidden
+    assert.deepEqual([...mine.branches.keys()].sort(), ['A', 'B', 'C', 'Y']);
+    assert.equal(isForeign(mine.branches.get('A')), false);
+    assert.equal(isForeign(mine.branches.get('B')), true);  // alice's PR, even though checked out locally
+    assert.equal(isForeign(mine.branches.get('C')), false); // local branch, no PR
+
+    const all = await snapshot(repo, { trunk: 'main', scope: 'everyone' });
+    assert.deepEqual([...all.branches.keys()].sort(), ['A', 'B', 'C', 'X', 'Y']);
+    assert.equal(isForeign(all.branches.get('X')), true);
+  } finally {
+    setGhPath('');
+  }
 });

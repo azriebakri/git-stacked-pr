@@ -12,7 +12,7 @@ main                       trunk
 ## Install
 
 ```bash
-cursor --install-extension stacked-prs-0.1.3.vsix
+cursor --install-extension stacked-prs-0.1.4.vsix
 ```
 or in Cursor: Command Palette → **Extensions: Install from VSIX…**
 
@@ -33,6 +33,12 @@ Open any worktree of the repo (main checkout or a branch worktree) and click the
 | Branch with no worktree | Inline **+** creates one in `<repo>.worktrees/<branch>`. |
 | After amending a lower PR | Right-click → **Restack Descendants**. |
 | PR base on GitHub is stale | Inline ☁ → pushes with `--force-with-lease` and runs `gh pr edit --base`. |
+
+### Mine vs everyone
+
+The filter button (funnel icon) in the view's title bar switches between **Only My PRs** and **Everyone's PRs**. "Mine" also includes any branch you have checked out locally.
+
+Other people's PRs are **view-only** (🔒 @author): you can browse their files, check them out and open them, but they can't be dragged, and no reorder, restack or push will ever touch them. Dropping your PR onto a teammate's PR stacks yours on top without moving anything of theirs. A move that would require rebasing their branch is refused with an explanation.
 
 ### What a drag does
 
@@ -69,7 +75,7 @@ Parent priority: `stackParent` config → PR base on GitHub → trunk. The recor
 | `stackedPrs.worktreeRoot` | `<repo>.worktrees` | Where new worktrees go |
 | `stackedPrs.afterReorder` | `ask` | `ask` / `pushAndUpdateBase` / `localOnly` |
 | `stackedPrs.ghPath` | auto | Full path to `gh` if auto-detect fails |
-| `stackedPrs.prAuthor` | `@me` | Filter PRs by author; empty = all open PRs |
+| `stackedPrs.scope` | `mine` | `mine` / `everyone` — same as the filter button in the view's title bar |
 
 ## Develop
 

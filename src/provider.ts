@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { Repo, Snapshot } from './git';
 import { FileChange, PrChanges, totals } from './diff';
-import { BranchInfo, childrenOf, roots } from './stack';
+import { BranchInfo, childrenOf, isForeign, roots } from './stack';
 
 export type Node =
   | { kind: 'root'; name: string }
@@ -148,6 +148,8 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
     const bits: string[] = [];
     const isCurrent = info.name === this.snap?.current;
     if (isCurrent) bits.push('✓ checked out here');
+    const foreign = isForeign(info);
+    if (foreign) bits.push(`🔒 @${pr!.author?.login ?? '?'}`);
     if (pr) bits.push(info.name);
     if (info.rebasing) bits.push('⚠ rebasing');
     else if (info.dirty) bits.push('● modified');
@@ -165,6 +167,7 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
         : new vscode.ThemeIcon('git-branch');
 
     const ctx = ['branch'];
+    if (foreign) ctx.push('foreign');
     if (isCurrent) ctx.push('current');
     ctx.push(info.worktree ? 'hasWorktree' : 'noWorktree');
     if (pr) ctx.push('hasPr');
@@ -174,6 +177,7 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
 
     const md = new vscode.MarkdownString(undefined, true);
     if (pr) md.appendMarkdown(`**#${pr.number}** ${escapeMd(pr.title)}${pr.isDraft ? ' _(draft)_' : ''}\n\n`);
+    if (pr?.author) md.appendMarkdown(`$(person) @${escapeMd(pr.author.login)}${foreign ? ' — $(lock) view only: can\'t be moved, rebased or pushed from here' : ''}\n\n`);
     md.appendMarkdown(`$(git-branch) \`${info.name}\` → \`${parent ?? '?'}\`\n\n`);
     if (baseOutOfSync) md.appendMarkdown(`$(warning) PR base on GitHub is \`${pr!.baseRefName}\`\n\n`);
     md.appendMarkdown(info.worktree ? `$(folder) ${escapeMd(info.worktree)}` : '$(circle-slash) not checked out in a worktree');
@@ -224,8 +228,15 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
   // ---- drag & drop ----
 
   handleDrag(source: readonly Node[], dt: vscode.DataTransfer): void {
-    // only PR rows are draggable
-    const names = source.filter(n => n.kind === 'branch').map(n => n.name);
+    // only your own PR rows are draggable
+    const rows = source.filter((n): n is Extract<Node, { kind: 'branch' }> => n.kind === 'branch');
+    const foreign = rows.filter(n => isForeign(n.info));
+    if (foreign.length) {
+      const pr = foreign[0].info.pr!;
+      vscode.window.showWarningMessage(`#${pr.number} is @${pr.author?.login ?? 'someone else'}'s PR — view only, it can't be moved.`);
+      return;
+    }
+    const names = rows.map(n => n.name);
     if (names.length) dt.set(MIME, new vscode.DataTransferItem(names));
   }
 

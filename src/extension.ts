@@ -4,7 +4,7 @@ import { FILE_SCHEME, FileStatusDecorations, Node, StackTree } from './provider'
 import * as fs from 'fs';
 import * as path from 'path';
 import { execute, Outcome, PendingRestack, preflight, resolveSteps, resume, Step } from './restack';
-import { describePlan, descendants, MovePlan, planMove, planMoveSubtree } from './stack';
+import { describePlan, descendants, foreignInPlan, isForeign, MovePlan, ownSubtree, planMove, planMoveSubtree, Scope } from './stack';
 
 const PENDING_KEY = 'stackedPrs.pending';
 
@@ -55,7 +55,10 @@ export function activate(context: vscode.ExtensionContext) {
     repo = await Repo.open(folder.uri.fsPath);
     if (!repo) return tree.set(undefined);
     try {
-      const snap = await snapshot(repo, { trunk: cfg().get('trunk', ''), prAuthor: cfg().get('prAuthor', '@me') });
+      const scope = cfg().get<Scope>('scope', 'mine');
+      void vscode.commands.executeCommand('setContext', 'stackedPrs.scope', scope);
+      const snap = await snapshot(repo, { trunk: cfg().get('trunk', ''), scope });
+      view.description = scope === 'mine' ? `My PRs${snap.viewerLogin ? ` (@${snap.viewerLogin})` : ''}` : 'All PRs';
       tree.set(snap);
       if (snap.ghError) {
         out.appendLine(`[gh] using: ${await ghBin()}`);
@@ -92,12 +95,31 @@ export function activate(context: vscode.ExtensionContext) {
   async function onDrop(moving: string, target: string) {
     if (!repo || !tree.snap) return;
     if (pending()) throw new Error('Finish or cancel the paused restack first.');
-    const plan = planMove(tree.snap.parents, tree.snap.trunk, moving, target);
+    if (isForeign(tree.snap.branches.get(moving))) throw new Error(viewOnly(moving));
+    const branches = tree.snap.branches;
+    const plan = planMove(tree.snap.parents, tree.snap.trunk, moving, target, b => !isForeign(branches.get(b)));
     await applyPlan(plan, `Move ${moving} onto ${target}?`);
+  }
+
+  function viewOnly(branch: string) {
+    const pr = tree.snap?.branches.get(branch)?.pr;
+    return `#${pr?.number} (${branch}) is @${pr?.author?.login ?? 'someone else'}'s PR — it's view-only, so it can't be moved, rebased or pushed from here.`;
   }
 
   async function applyPlan(plan: MovePlan, title: string) {
     if (!repo || !tree.snap) return;
+    // Never rebase or push someone else's branch.
+    const foreign = foreignInPlan(plan, tree.snap.branches);
+    if (foreign.length) {
+      const who = foreign.map(b => {
+        const pr = tree.snap!.branches.get(b)!.pr!;
+        return `#${pr.number} ${b} (@${pr.author?.login ?? '?'})`;
+      });
+      throw new Error(
+        `This move would rebase PRs that aren't yours: ${who.join(', ')}. ` +
+        `Move your PR somewhere that doesn't sit underneath theirs, or ask the author to restack.`,
+      );
+    }
     if (plan.reparented.length === 0) return;
 
     // Branches that must be rebased but aren't checked out anywhere: offer to create worktrees.
@@ -185,6 +207,9 @@ export function activate(context: vscode.ExtensionContext) {
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: 'Stacked PRs' },
       async p => {
+        // Belt and braces: never push or retarget someone else's PR.
+        toPush = toPush.filter(b => !isForeign(tree.snap!.branches.get(b)));
+        toRetarget = toRetarget.filter(b => !isForeign(tree.snap!.branches.get(b)));
         for (const b of toPush) {
           p.report({ message: `Pushing ${b}` });
           await repo!.pushForce(remote, b);
@@ -227,6 +252,14 @@ export function activate(context: vscode.ExtensionContext) {
   const reg = (id: string, fn: (...a: any[]) => any) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
   reg('stackedPrs.refresh', () => refresh());
+
+  const setScope = async (scope: Scope) => {
+    const inspect = cfg().inspect('scope');
+    const target = inspect?.workspaceValue !== undefined ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+    await cfg().update('scope', scope, target); // triggers refresh via onDidChangeConfiguration
+  };
+  reg('stackedPrs.showMine', () => setScope('mine'));
+  reg('stackedPrs.showEveryone', () => setScope('everyone'));
   reg('stackedPrs.openWorktree', (n?: Node) => {
     const b = branchArg(n);
     if (b.info.worktree) openFolder(b.info.worktree, true);
@@ -345,6 +378,7 @@ export function activate(context: vscode.ExtensionContext) {
       const b = branchArg(n);
       const snap = tree.snap!;
       if (pending()) throw new Error('Finish or cancel the paused restack first.');
+      if (isForeign(b.info)) throw new Error(viewOnly(b.name));
       const below = new Set(descendants(snap.parents, b.name));
       const candidates = [snap.trunk, ...snap.branches.keys()].filter(x => x !== b.name);
       const target = await vscode.window.showQuickPick(
@@ -375,8 +409,18 @@ export function activate(context: vscode.ExtensionContext) {
       const b = branchArg(n);
       const snap = tree.snap!;
       if (pending()) throw new Error('Finish or cancel the paused restack first.');
-      // Rebase the branch onto its parent and everything above it onto theirs.
-      const chain = [b.name, ...descendants(snap.parents, b.name)];
+      if (isForeign(b.info)) throw new Error(viewOnly(b.name));
+      // Rebase the branch onto its parent and everything above it onto theirs —
+      // skipping other people's PRs (and anything stacked on them).
+      const { own: chain, skipped } = ownSubtree(snap.parents, b.name, x => !isForeign(snap.branches.get(x)));
+      if (skipped.length) {
+        const ok = await vscode.window.showWarningMessage(
+          `Skipping PRs that aren't yours (and anything stacked on them): ${skipped.join(', ')}`,
+          { modal: true },
+          'Restack the Rest',
+        );
+        if (!ok) return;
+      }
       const plan: MovePlan = {
         newParents: snap.parents,
         reparented: [],
@@ -415,7 +459,9 @@ export function activate(context: vscode.ExtensionContext) {
   reg('stackedPrs.syncBase', (n?: Node) =>
     guarded(async () => {
       const b = branchArg(n);
-      const chain = [b.name, ...descendants(tree.snap!.parents, b.name)];
+      if (isForeign(b.info)) throw new Error(viewOnly(b.name));
+      const snap = tree.snap!;
+      const { own: chain } = ownSubtree(snap.parents, b.name, x => !isForeign(snap.branches.get(x)));
       await pushAndRetarget(chain, chain);
     }),
   );

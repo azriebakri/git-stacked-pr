@@ -2,7 +2,7 @@ import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { BranchInfo, PrInfo, sanitize } from './stack';
+import { BranchInfo, PrInfo, sanitize, Scope } from './stack';
 import { mergeStats, parseNameStatusZ, parseNumstatZ, PrChanges } from './diff';
 
 export class CmdError extends Error {
@@ -312,14 +312,24 @@ export class Repo {
 
   // ---- GitHub via gh CLI ----
 
-  async openPrs(author: string): Promise<PrInfo[]> {
+  /** All open PRs in the repo (filtering by scope happens locally, so ownership is always known). */
+  async openPrs(): Promise<PrInfo[]> {
     const args = [
-      'pr', 'list', '--state', 'open', '--limit', '200',
-      '--json', 'number,title,url,headRefName,baseRefName,isDraft,reviewDecision',
+      'pr', 'list', '--state', 'open', '--limit', '500',
+      '--json', 'number,title,url,headRefName,baseRefName,isDraft,reviewDecision,author',
     ];
-    if (author) args.push('--author', author);
     const out = await run(await ghBin(), args, this.cwd);
     return JSON.parse(out) as PrInfo[];
+  }
+
+  private static viewer: Promise<string> | undefined;
+  /** Login of the account gh is signed in as. */
+  async viewerLogin(): Promise<string> {
+    Repo.viewer ??= run(await ghBin(), ['api', 'user', '--jq', '.login'], this.cwd).then(s => s.trim());
+    return Repo.viewer.catch(e => {
+      Repo.viewer = undefined;
+      throw e;
+    });
   }
 
   async setPrBase(pr: number, base: string): Promise<void> {
@@ -335,10 +345,11 @@ export interface Snapshot {
   parents: Map<string, string>;
   ghError?: string;
   ghErrorDetail?: string;
+  viewerLogin?: string;
 }
 
 /** Collect everything the tree needs: worktrees, PRs, stored parents. */
-export async function snapshot(repo: Repo, cfg: { trunk: string; prAuthor: string }): Promise<Snapshot> {
+export async function snapshot(repo: Repo, cfg: { trunk: string; scope: Scope }): Promise<Snapshot> {
   const trunk = await repo.detectTrunk(cfg.trunk);
   const [wts, stored, locals, current] = await Promise.all([
     repo.worktrees(),
@@ -350,8 +361,12 @@ export async function snapshot(repo: Repo, cfg: { trunk: string; prAuthor: strin
   let prs: PrInfo[] = [];
   let ghError: string | undefined;
   let ghErrorDetail: string | undefined;
+  let viewerLogin: string | undefined;
   try {
-    prs = await repo.openPrs(cfg.prAuthor);
+    const [all, viewer] = await Promise.all([repo.openPrs(), repo.viewerLogin()]);
+    const me = viewer.toLowerCase();
+    prs = all.map(pr => ({ ...pr, mine: !!me && pr.author?.login?.toLowerCase() === me }));
+    viewerLogin = viewer;
   } catch (e: any) {
     ghError = explainGhError(e);
     ghErrorDetail = e?.message ?? String(e);
@@ -365,8 +380,17 @@ export async function snapshot(repo: Repo, cfg: { trunk: string; prAuthor: strin
   };
 
   for (const wt of wts) if (wt.branch && wt.branch !== trunk) touch(wt.branch).worktree = wt.path;
-  for (const pr of prs) if (pr.headRefName !== trunk) touch(pr.headRefName).pr = pr;
-  for (const [b] of stored) if (b !== trunk && locals.has(b)) touch(b);
+  for (const pr of prs) {
+    if (pr.headRefName === trunk) continue;
+    // Branches you have locally always show (with their PR, marked view-only if not yours).
+    // Other PRs show only in "everyone" scope.
+    if (cfg.scope === 'everyone' || pr.mine || branches.has(pr.headRefName)) touch(pr.headRefName).pr = pr;
+  }
+  for (const [b] of stored) {
+    if (b === trunk || !locals.has(b) || branches.has(b)) continue;
+    const info = touch(b);
+    info.pr = prs.find(p => p.headRefName === b);
+  }
 
   // parent priority: local stack config (latest intent) > PR base > trunk
   const parents = new Map<string, string>();
@@ -385,5 +409,5 @@ export async function snapshot(repo: Repo, cfg: { trunk: string; prAuthor: strin
     }),
   );
 
-  return { trunk, branches, parents: sanitize(parents, trunk), ghError, ghErrorDetail, current };
+  return { trunk, branches, parents: sanitize(parents, trunk), ghError, ghErrorDetail, current, viewerLogin };
 }
