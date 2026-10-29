@@ -1,0 +1,64 @@
+name: Publish
+# Runs when you push a version tag (e.g. v0.2.0), or manually from the Actions tab.
+# Marketplace steps are skipped until the matching secret exists, so this can run before
+# the accounts are set up and will still produce a GitHub Release with the .vsix.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}   # Visual Studio Marketplace (VS Code)
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}   # Open VSX (Cursor, VSCodium, Windsurf…)
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install
+      - run: npm test
+
+      - name: Package
+        id: pkg
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          npx vsce package -o "git-stacked-pr-$VERSION.vsix"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "vsix=git-stacked-pr-$VERSION.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: GitHub Release
+        run: |
+          TAG="v${{ steps.pkg.outputs.version }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${{ steps.pkg.outputs.vsix }}" --clobber
+          else
+            gh release create "$TAG" "${{ steps.pkg.outputs.vsix }}" --target "$GITHUB_SHA" --title "$TAG" --notes-file CHANGELOG.md
+          fi
+
+      - name: Publish to Open VSX (Cursor)
+        if: env.OVSX_PAT != ''
+        run: |
+          PUBLISHER=$(node -p "require('./package.json').publisher")
+          npx ovsx create-namespace "$PUBLISHER" -p "$OVSX_PAT" || true   # first time only
+          npx ovsx publish "${{ steps.pkg.outputs.vsix }}" -p "$OVSX_PAT" --skip-duplicate
+
+      - name: Publish to Visual Studio Marketplace (VS Code)
+        if: env.VSCE_PAT != ''
+        run: npx vsce publish --packagePath "${{ steps.pkg.outputs.vsix }}" -p "$VSCE_PAT" --skip-duplicate
+
+      - name: Summary
+        run: |
+          {
+            echo "### git-stacked-pr ${{ steps.pkg.outputs.version }}"
+            echo "- GitHub Release: ✅"
+            if [ -n "$OVSX_PAT" ]; then echo "- Open VSX (Cursor): ✅"; else echo "- Open VSX (Cursor): skipped — add the OVSX_PAT secret"; fi
+            if [ -n "$VSCE_PAT" ]; then echo "- VS Code Marketplace: ✅"; else echo "- VS Code Marketplace: skipped — add the VSCE_PAT secret"; fi
+          } >> "$GITHUB_STEP_SUMMARY"

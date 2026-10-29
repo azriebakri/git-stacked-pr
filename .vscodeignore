@@ -1,5 +1,10 @@
 src/**
 out/test/**
 **/*.map
-tsconfig.json
+tsconfig*.json
+typings/**
 node_modules/**
+.github/**
+.vscode/**
+*.vsix
+*.bundle

@@ -1,4 +1,4 @@
-# Stacked PRs (Cursor / VS Code extension)
+# Git Stacked PR (Cursor / VS Code extension)
 
 A sidebar that shows your pull requests as stacks, lets you **drag and drop a PR to reorder the stack**, and does the rebasing for you — each branch inside its **own git worktree**.
 
@@ -15,10 +15,9 @@ Linear stacks are shown as one flat, numbered list under a coloured **Stack** he
 
 ## Install
 
-```bash
-cursor --install-extension stacked-prs-0.1.6.vsix
-```
-or in Cursor: Command Palette → **Extensions: Install from VSIX…**
+- **Cursor** (and VSCodium, Windsurf): search **Git Stacked PR** in the Extensions view (from [Open VSX](https://open-vsx.org/extension/azriebakri/git-stacked-pr)).
+- **VS Code**: search **Git Stacked PR** in the Extensions view (from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=azriebakri.git-stacked-pr)).
+- Or download the `.vsix` from [Releases](https://github.com/azriebakri/git-stacked-pr/releases) → Command Palette → **Extensions: Install from VSIX…**
 
 Requirements: `git` and the GitHub CLI (`gh auth login`). `gh` is auto-detected (including Homebrew paths and your login shell PATH); set `stackedPrs.ghPath` if it still isn't found. Without `gh`, the view still works on local branches/worktrees only.
 
@@ -90,6 +89,16 @@ npm install
 npm test            # unit tests + end-to-end rebase tests against temp repos with worktrees
 npm run package     # builds the .vsix
 ```
+
+### Releasing
+
+Bump `version` in `package.json`, add a `CHANGELOG.md` entry, then push a tag:
+
+```bash
+git tag v0.2.1 && git push origin v0.2.1
+```
+
+The **Publish** workflow tests, packages, attaches the `.vsix` to a GitHub Release, and publishes to Open VSX (`OVSX_PAT` secret) and the VS Code Marketplace (`VSCE_PAT` secret).
 Press F5 in Cursor with this folder open to run an Extension Development Host.
 
 ### Layout

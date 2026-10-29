@@ -1,24 +1,46 @@
 {
-  "name": "stacked-prs",
-  "displayName": "Stacked PRs",
-  "description": "View stacked pull requests as a tree, drag and drop to reorder them, with each branch living in its own git worktree.",
-  "version": "0.1.6",
-  "publisher": "local",
+  "name": "git-stacked-pr",
+  "displayName": "Git Stacked PR",
+  "description": "See your stacked pull requests as a tree, drag and drop to reorder them, review files with a viewed checklist \u2014 every branch in its own git worktree.",
+  "version": "0.2.0",
+  "publisher": "azriebakri",
   "license": "MIT",
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "SCM Providers"
+    "SCM Providers",
+    "Other"
   ],
-  "main": "./out/extension.js",
-  "activationEvents": [
-    "workspaceContains:.git"
+  "keywords": [
+    "stacked",
+    "stacked prs",
+    "stacked diffs",
+    "pull request",
+    "github",
+    "worktree",
+    "git worktree",
+    "rebase",
+    "restack",
+    "code review"
   ],
+  "galleryBanner": {
+    "color": "#1f2937",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/azriebakri/git-stacked-pr"
   },
+  "bugs": {
+    "url": "https://github.com/azriebakri/git-stacked-pr/issues"
+  },
+  "homepage": "https://github.com/azriebakri/git-stacked-pr#readme",
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:.git"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -405,15 +427,17 @@
     ]
   },
   "scripts": {
+    "vscode:prepublish": "npm run compile",
     "compile": "tsc -p .",
     "watch": "tsc -w -p .",
-    "test": "tsc -p . && node --test out/test/",
-    "package": "vsce package --allow-missing-repository --skip-license"
+    "test": "tsc -p . && node --test out/test/*.test.js",
+    "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "~1.85.0",
     "@vscode/vsce": "^3.2.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "ovsx": "^0.10.0"
   }
 }
