@@ -2,7 +2,7 @@
   "name": "stacked-prs",
   "displayName": "Stacked PRs",
   "description": "View stacked pull requests as a tree, drag and drop to reorder them, with each branch living in its own git worktree.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -263,6 +263,11 @@
           "type": "string",
           "default": "@me",
           "description": "Only show PRs by this author (gh syntax). Empty = all open PRs."
+        },
+        "stackedPrs.ghPath": {
+          "type": "string",
+          "default": "",
+          "description": "Full path to the GitHub CLI (e.g. /opt/homebrew/bin/gh). Empty = auto-detect, including Homebrew locations and your login shell's PATH."
         }
       }
     }

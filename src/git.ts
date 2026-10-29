@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { BranchInfo, PrInfo, sanitize } from './stack';
 
@@ -14,6 +15,83 @@ export class CmdError extends Error {
   }
 }
 
+// ---- locating gh ----
+// Apps launched from the macOS Dock / Linux launchers don't inherit the shell PATH,
+// so `gh` installed via Homebrew etc. is invisible to a plain spawn. Look harder.
+
+let ghOverride = '';
+let ghResolved: Promise<string> | undefined;
+
+/** Called when the `stackedPrs.ghPath` setting changes. */
+export function setGhPath(p: string) {
+  ghOverride = p.trim();
+  ghResolved = undefined;
+}
+
+const isExec = (f: string) => {
+  try {
+    fs.accessSync(f, fs.constants.X_OK);
+    return fs.statSync(f).isFile();
+  } catch {
+    return false;
+  }
+};
+
+async function findGh(): Promise<string> {
+  if (ghOverride) return ghOverride;
+  const exe = process.platform === 'win32' ? 'gh.exe' : 'gh';
+  const home = os.homedir();
+  const dirs = [
+    ...(process.env.PATH ?? '').split(path.delimiter),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/home/linuxbrew/.linuxbrew/bin',
+    path.join(home, '.local', 'bin'),
+    path.join(home, 'bin'),
+    '/usr/bin',
+    '/snap/bin',
+    'C:\\Program Files\\GitHub CLI',
+  ].filter(Boolean);
+  for (const d of dirs) {
+    const f = path.join(d, exe);
+    if (isExec(f)) return f;
+  }
+  // Last resort: ask the user's login shell (picks up asdf/mise/nix/custom PATHs).
+  if (process.platform !== 'win32') {
+    const shell = process.env.SHELL || '/bin/zsh';
+    try {
+      const out = await new Promise<string>((res, rej) =>
+        execFile(shell, ['-ilc', 'command -v gh'], { timeout: 5000 }, (e, o) => (e ? rej(e) : res(o))),
+      );
+      const f = out.trim().split('\n').pop()?.trim();
+      if (f && isExec(f)) return f;
+    } catch {
+      /* fall through */
+    }
+  }
+  return 'gh';
+}
+
+export function ghBin(): Promise<string> {
+  return (ghResolved ??= findGh());
+}
+
+/** Turn a gh failure into something actionable. */
+export function explainGhError(e: any): string {
+  const msg: string = e?.message ?? String(e);
+  if (e?.code === 'ENOENT' || /ENOENT|not found|spawn .*gh/i.test(msg) && !/HTTP|graphql/i.test(msg)) {
+    return 'GitHub CLI (gh) not found. Install it, or set "stackedPrs.ghPath" to the output of `which gh`.';
+  }
+  if (/auth login|not logged|authentication|401|GH_TOKEN/i.test(msg)) {
+    return 'gh is not logged in for this host. Run `gh auth login` in a terminal, then Refresh.';
+  }
+  if (/no git remotes|none of the git remotes|could not determine|not a git repository/i.test(msg)) {
+    return 'gh could not match this repo to a GitHub remote. Check `git remote -v`, or run `gh repo set-default`.';
+  }
+  const first = msg.split('\n').find(l => l.trim()) ?? msg;
+  return `gh failed: ${first.slice(0, 200)}`;
+}
+
 export function run(bin: string, args: string[], cwd: string, input?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = execFile(
@@ -22,8 +100,11 @@ export function run(bin: string, args: string[], cwd: string, input?: string): P
       { cwd, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: 'true' } },
       (err, stdout, stderr) => {
         if (err) {
-          const code = typeof (err as any).code === 'number' ? (err as any).code : null;
-          reject(new CmdError(`${bin} ${args.join(' ')}`, code, stdout, stderr));
+          const raw = (err as any).code;
+          const code = typeof raw === 'number' ? raw : null;
+          const ce = new CmdError(`${bin} ${args.join(' ')}`, code, stdout, stderr || (raw === 'ENOENT' ? `spawn ${bin} ENOENT` : ''));
+          if (raw === 'ENOENT') (ce as any).code = 'ENOENT';
+          reject(ce);
         } else {
           resolve(stdout);
         }
@@ -185,12 +266,12 @@ export class Repo {
       '--json', 'number,title,url,headRefName,baseRefName,isDraft,reviewDecision',
     ];
     if (author) args.push('--author', author);
-    const out = await run('gh', args, this.cwd);
+    const out = await run(await ghBin(), args, this.cwd);
     return JSON.parse(out) as PrInfo[];
   }
 
   async setPrBase(pr: number, base: string): Promise<void> {
-    await run('gh', ['pr', 'edit', String(pr), '--base', base], this.cwd);
+    await run(await ghBin(), ['pr', 'edit', String(pr), '--base', base], this.cwd);
   }
 }
 
@@ -199,6 +280,7 @@ export interface Snapshot {
   branches: Map<string, BranchInfo>;
   parents: Map<string, string>;
   ghError?: string;
+  ghErrorDetail?: string;
 }
 
 /** Collect everything the tree needs: worktrees, PRs, stored parents. */
@@ -208,10 +290,12 @@ export async function snapshot(repo: Repo, cfg: { trunk: string; prAuthor: strin
 
   let prs: PrInfo[] = [];
   let ghError: string | undefined;
+  let ghErrorDetail: string | undefined;
   try {
     prs = await repo.openPrs(cfg.prAuthor);
   } catch (e: any) {
-    ghError = e?.message ?? String(e);
+    ghError = explainGhError(e);
+    ghErrorDetail = e?.message ?? String(e);
   }
 
   const branches = new Map<string, BranchInfo>();
@@ -242,5 +326,5 @@ export async function snapshot(repo: Repo, cfg: { trunk: string; prAuthor: strin
     }),
   );
 
-  return { trunk, branches, parents: sanitize(parents, trunk), ghError };
+  return { trunk, branches, parents: sanitize(parents, trunk), ghError, ghErrorDetail };
 }

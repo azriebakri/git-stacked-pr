@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Repo, snapshot } from './git';
+import { ghBin, Repo, setGhPath, snapshot } from './git';
 import { Node, StackTree } from './provider';
 import { execute, Outcome, PendingRestack, preflight, resolveSteps, resume, Step } from './restack';
 import { describePlan, descendants, MovePlan, planMove, planMoveSubtree } from './stack';
@@ -38,8 +38,9 @@ export function activate(context: vscode.ExtensionContext) {
       const snap = await snapshot(repo, { trunk: cfg().get('trunk', ''), prAuthor: cfg().get('prAuthor', '@me') });
       tree.set(snap);
       if (snap.ghError) {
-        out.appendLine(`[gh] ${snap.ghError}`);
-        view.message = pending() ? view.message : 'GitHub CLI unavailable — showing local branches only (see Output › Stacked PRs).';
+        out.appendLine(`[gh] using: ${await ghBin()}`);
+        out.appendLine(`[gh] ${snap.ghErrorDetail ?? snap.ghError}`);
+        view.message = pending() ? view.message : `${snap.ghError} Showing local branches only.`;
       } else if (!pending()) {
         view.message = undefined;
       }
@@ -327,11 +328,16 @@ export function activate(context: vscode.ExtensionContext) {
   watcher.onDidDelete(soon);
   context.subscriptions.push(
     watcher,
-    vscode.workspace.onDidChangeConfiguration(e => e.affectsConfiguration('stackedPrs') && refresh()),
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (!e.affectsConfiguration('stackedPrs')) return;
+      setGhPath(cfg().get('ghPath', ''));
+      refresh();
+    }),
     vscode.workspace.onDidChangeWorkspaceFolders(refresh),
     view.onDidChangeVisibility(e => e.visible && refresh()),
   );
 
+  setGhPath(cfg().get('ghPath', ''));
   void setPending(pending());
   void refresh();
 }

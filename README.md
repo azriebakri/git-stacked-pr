@@ -12,11 +12,11 @@ main                       trunk
 ## Install
 
 ```bash
-cursor --install-extension stacked-prs-0.1.0.vsix
+cursor --install-extension stacked-prs-0.1.1.vsix
 ```
 or in Cursor: Command Palette → **Extensions: Install from VSIX…**
 
-Requirements: `git` and the GitHub CLI (`gh auth login`). Without `gh`, the view still works on local branches/worktrees only.
+Requirements: `git` and the GitHub CLI (`gh auth login`). `gh` is auto-detected (including Homebrew paths and your login shell PATH); set `stackedPrs.ghPath` if it still isn't found. Without `gh`, the view still works on local branches/worktrees only.
 
 ## Using it
 
@@ -66,6 +66,7 @@ Parent priority: `stackParent` config → PR base on GitHub → trunk. The recor
 | `stackedPrs.remote` | `origin` | Push remote |
 | `stackedPrs.worktreeRoot` | `<repo>.worktrees` | Where new worktrees go |
 | `stackedPrs.afterReorder` | `ask` | `ask` / `pushAndUpdateBase` / `localOnly` |
+| `stackedPrs.ghPath` | auto | Full path to `gh` if auto-detect fails |
 | `stackedPrs.prAuthor` | `@me` | Filter PRs by author; empty = all open PRs |
 
 ## Develop
