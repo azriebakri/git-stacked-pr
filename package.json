@@ -1,0 +1,282 @@
+{
+  "name": "stacked-prs",
+  "displayName": "Stacked PRs",
+  "description": "View stacked pull requests as a tree, drag and drop to reorder them, with each branch living in its own git worktree.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:.git"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/azriebakri/git-stacked-pr"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "stackedPrs",
+          "title": "Stacked PRs",
+          "icon": "media/stack.svg"
+        }
+      ]
+    },
+    "views": {
+      "stackedPrs": [
+        {
+          "id": "stackedPrs.tree",
+          "name": "Stacks",
+          "icon": "media/stack.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "stackedPrs.tree",
+        "contents": "No git repository found in this workspace.\n[Refresh](command:stackedPrs.refresh)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "stackedPrs.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.openWorktree",
+        "title": "Open Worktree in New Window",
+        "icon": "$(empty-window)",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.openWorktreeHere",
+        "title": "Open Worktree in This Window",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.openTerminal",
+        "title": "Open Terminal in Worktree",
+        "icon": "$(terminal)",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.openPr",
+        "title": "Open PR in Browser",
+        "icon": "$(link-external)",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.createWorktree",
+        "title": "Create Worktree for Branch",
+        "icon": "$(add)",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.moveTo",
+        "title": "Move onto\u2026",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.restack",
+        "title": "Restack Descendants",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.syncBase",
+        "title": "Push & Update PR Base",
+        "icon": "$(cloud-upload)",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.abortRebase",
+        "title": "Abort Rebase in Worktree",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.continueRestack",
+        "title": "Continue Restack",
+        "icon": "$(debug-continue)",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.cancelRestack",
+        "title": "Cancel Restack",
+        "icon": "$(debug-stop)",
+        "category": "Stacked PRs"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "stackedPrs.continueRestack",
+          "when": "view == stackedPrs.tree && stackedPrs.pendingRestack",
+          "group": "navigation@1"
+        },
+        {
+          "command": "stackedPrs.cancelRestack",
+          "when": "view == stackedPrs.tree && stackedPrs.pendingRestack",
+          "group": "navigation@2"
+        },
+        {
+          "command": "stackedPrs.refresh",
+          "when": "view == stackedPrs.tree",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "stackedPrs.openWorktree",
+          "when": "view == stackedPrs.tree && viewItem =~ /hasWorktree/",
+          "group": "inline@1"
+        },
+        {
+          "command": "stackedPrs.openTerminal",
+          "when": "view == stackedPrs.tree && viewItem =~ /hasWorktree/",
+          "group": "inline@2"
+        },
+        {
+          "command": "stackedPrs.openPr",
+          "when": "view == stackedPrs.tree && viewItem =~ /hasPr/",
+          "group": "inline@3"
+        },
+        {
+          "command": "stackedPrs.createWorktree",
+          "when": "view == stackedPrs.tree && viewItem =~ /noWorktree/",
+          "group": "inline@1"
+        },
+        {
+          "command": "stackedPrs.syncBase",
+          "when": "view == stackedPrs.tree && viewItem =~ /baseOutOfSync/",
+          "group": "inline@4"
+        },
+        {
+          "command": "stackedPrs.openWorktree",
+          "when": "view == stackedPrs.tree && viewItem =~ /hasWorktree/",
+          "group": "1_open@1"
+        },
+        {
+          "command": "stackedPrs.openWorktreeHere",
+          "when": "view == stackedPrs.tree && viewItem =~ /hasWorktree/",
+          "group": "1_open@2"
+        },
+        {
+          "command": "stackedPrs.openTerminal",
+          "when": "view == stackedPrs.tree && viewItem =~ /hasWorktree/",
+          "group": "1_open@3"
+        },
+        {
+          "command": "stackedPrs.openPr",
+          "when": "view == stackedPrs.tree && viewItem =~ /hasPr/",
+          "group": "1_open@4"
+        },
+        {
+          "command": "stackedPrs.createWorktree",
+          "when": "view == stackedPrs.tree && viewItem =~ /noWorktree/",
+          "group": "1_open@5"
+        },
+        {
+          "command": "stackedPrs.moveTo",
+          "when": "view == stackedPrs.tree && viewItem =~ /branch/",
+          "group": "2_stack@1"
+        },
+        {
+          "command": "stackedPrs.restack",
+          "when": "view == stackedPrs.tree && viewItem =~ /branch/",
+          "group": "2_stack@2"
+        },
+        {
+          "command": "stackedPrs.syncBase",
+          "when": "view == stackedPrs.tree && viewItem =~ /hasPr/",
+          "group": "2_stack@3"
+        },
+        {
+          "command": "stackedPrs.abortRebase",
+          "when": "view == stackedPrs.tree && viewItem =~ /rebasing/",
+          "group": "3_danger@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "stackedPrs.openWorktree",
+          "when": "false"
+        },
+        {
+          "command": "stackedPrs.openWorktreeHere",
+          "when": "false"
+        },
+        {
+          "command": "stackedPrs.openTerminal",
+          "when": "false"
+        },
+        {
+          "command": "stackedPrs.openPr",
+          "when": "false"
+        },
+        {
+          "command": "stackedPrs.createWorktree",
+          "when": "false"
+        },
+        {
+          "command": "stackedPrs.abortRebase",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Stacked PRs",
+      "properties": {
+        "stackedPrs.trunk": {
+          "type": "string",
+          "default": "",
+          "description": "Trunk branch (e.g. main). Leave empty to auto-detect from origin/HEAD."
+        },
+        "stackedPrs.remote": {
+          "type": "string",
+          "default": "origin",
+          "description": "Remote to push stacked branches to."
+        },
+        "stackedPrs.worktreeRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Folder where new worktrees are created. Empty = '<repo>.worktrees' next to the main checkout."
+        },
+        "stackedPrs.afterReorder": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "pushAndUpdateBase",
+            "localOnly"
+          ],
+          "default": "ask",
+          "description": "After a drag-and-drop reorder rebases branches: push them (--force-with-lease) and update PR bases on GitHub, keep the change local, or ask each time."
+        },
+        "stackedPrs.prAuthor": {
+          "type": "string",
+          "default": "@me",
+          "description": "Only show PRs by this author (gh syntax). Empty = all open PRs."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "test": "tsc -p . && node --test out/test/",
+    "package": "vsce package --allow-missing-repository --skip-license"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "~1.85.0",
+    "@vscode/vsce": "^3.2.0",
+    "typescript": "^5.4.0"
+  }
+}
