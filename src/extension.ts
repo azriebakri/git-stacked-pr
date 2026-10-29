@@ -1,12 +1,12 @@
 import * as vscode from 'vscode';
 import { ghBin, git, Repo, setGhPath, snapshot } from './git';
-import { FileStatusDecorations, Node, StackTree } from './provider';
+import { ClickAction, FileStatusDecorations, Node, StackTree } from './provider';
 import { ViewedStore } from './viewed';
 import { filesUnder } from './diff';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execute, Outcome, PendingRestack, preflight, resolveSteps, resume, Step } from './restack';
-import { describePlan, descendants, foreignInPlan, isForeign, MovePlan, ownSubtree, planMove, planMoveSubtree, Scope } from './stack';
+import { describePlan, descendants, foreignInPlan, isForeign, MovePlan, ownSubtree, planInsertBefore, planMove, planMoveSubtree, Scope } from './stack';
 
 const PENDING_KEY = 'stackedPrs.pending';
 
@@ -16,7 +16,8 @@ export function activate(context: vscode.ExtensionContext) {
   const cfg = () => vscode.workspace.getConfiguration('stackedPrs');
   const out = vscode.window.createOutputChannel('Stacked PRs');
   const viewed = new ViewedStore(context.workspaceState, () => repo, m => out.appendLine(m));
-  const tree = new StackTree((moving, target) => guarded(() => onDrop(moving, target)), {
+  const tree = new StackTree((moving, target, mode) => guarded(() => onDrop(moving, target, mode)), {
+    clickAction: () => cfg().get<ClickAction>('clickAction', 'openPr'),
     repo: () => repo,
     remote: () => cfg().get('remote', 'origin'),
     viewed,
@@ -115,13 +116,23 @@ export function activate(context: vscode.ExtensionContext) {
 
   // ---------- reorder ----------
 
-  async function onDrop(moving: string, target: string) {
+  async function onDrop(moving: string, target: string, mode: 'onto' | 'before' = 'onto') {
     if (!repo || !tree.snap) return;
     if (pending()) throw new Error('Finish or cancel the paused restack first.');
     if (isForeign(tree.snap.branches.get(moving))) throw new Error(viewOnly(moving));
     const branches = tree.snap.branches;
+    if (mode === 'before') {
+      const plan = planInsertBefore(tree.snap.parents, tree.snap.trunk, moving, target);
+      await applyPlan(plan, `Move ${label(moving)} to the bottom of the stack, below ${label(target)}?`);
+      return;
+    }
     const plan = planMove(tree.snap.parents, tree.snap.trunk, moving, target, b => !isForeign(branches.get(b)));
-    await applyPlan(plan, `Move ${moving} onto ${target}?`);
+    await applyPlan(plan, `Move ${label(moving)} on top of ${label(target)}?`);
+  }
+
+  function label(branch: string) {
+    const pr = tree.snap?.branches.get(branch)?.pr;
+    return pr ? `#${pr.number}` : branch;
   }
 
   function viewOnly(branch: string) {

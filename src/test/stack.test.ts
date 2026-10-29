@@ -379,3 +379,35 @@ test('e2e: blob ids change only for files whose content changed', async () => {
   assert.notEqual(blob(before, 'D.txt'), blob(after, 'D.txt'));
   assert.match(blob(after, 'D.txt')!, /^[0-9a-f]{40,64}$/);
 });
+
+// ---------- flattened layout ----------
+import { forkGroups, groupsUnder, planInsertBefore } from '../stack';
+
+test('layout: linear stacks are flattened, lone PRs stay single, forks nest', () => {
+  // main <- A <- B <- C ;  main <- S ;  B forks? no.  main <- F <- (G, H<-I)
+  const p = pm({ A: 'main', B: 'A', C: 'B', S: 'main', F: 'main', G: 'F', H: 'F', I: 'H' });
+  assert.deepEqual(groupsUnder(p, 'main'), [
+    { type: 'stack', chain: ['A', 'B', 'C'] },
+    { type: 'single', branch: 'F' },
+    { type: 'single', branch: 'S' },
+  ]);
+  assert.deepEqual(forkGroups(p, 'B'), []); // B's single child is in the same flat list
+  assert.deepEqual(forkGroups(p, 'F'), [
+    { type: 'single', branch: 'G' },
+    { type: 'stack', chain: ['H', 'I'] },
+  ]);
+  // a stack that ends in a fork: the fork hangs off the last row
+  const q = pm({ A: 'main', B: 'A', X: 'B', Y: 'B' });
+  assert.deepEqual(groupsUnder(q, 'main'), [{ type: 'stack', chain: ['A', 'B'] }]);
+  assert.equal(forkGroups(q, 'B').length, 2);
+});
+
+test('drop on stack header: insert at the bottom of that stack', () => {
+  const p = pm({ A: 'main', B: 'A', C: 'B', S: 'main' });
+  const plan = planInsertBefore(p, 'main', 'S', 'A');
+  assert.deepEqual(obj(plan.newParents), { S: 'main', A: 'S', B: 'A', C: 'B' });
+  // moving a PR from the middle of the same stack to its bottom
+  const plan2 = planInsertBefore(p, 'main', 'C', 'A');
+  assert.deepEqual(obj(plan2.newParents), { C: 'main', A: 'C', B: 'A', S: 'main' });
+  assert.deepEqual(plan2.restack.map(r => r.branch), ['C', 'A', 'B']);
+});

@@ -2,7 +2,7 @@
   "name": "stacked-prs",
   "displayName": "Stacked PRs",
   "description": "View stacked pull requests as a tree, drag and drop to reorder them, with each branch living in its own git worktree.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -378,6 +378,21 @@
           ],
           "default": "mine",
           "description": "Which PRs to show. Also switchable from the filter button in the view's title bar."
+        },
+        "stackedPrs.clickAction": {
+          "type": "string",
+          "enum": [
+            "openPr",
+            "openWorktree",
+            "none"
+          ],
+          "enumDescriptions": [
+            "Open the PR on GitHub",
+            "Open the branch's worktree in a new window",
+            "Do nothing (just select)"
+          ],
+          "default": "openPr",
+          "description": "What clicking a PR row does."
         }
       }
     },

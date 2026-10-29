@@ -209,3 +209,43 @@ export function describePlan(plan: MovePlan): string {
   if (extra > 0) lines.push(`• +${extra} descendant branch(es) restacked`);
   return lines.join('\n');
 }
+
+// ---- display layout ----
+
+/** How children of a branch are shown: a lone PR row, or a linear stack flattened into one list. */
+export type Group = { type: 'single'; branch: string } | { type: 'stack'; chain: string[] };
+
+/**
+ * Lay out the children of `parent` for display. Linear runs (each PR has exactly one PR on top)
+ * are flattened into a stack, so depth doesn't grow with stack length. Where a PR has two or more
+ * PRs on top (a fork), each of those starts its own group nested under that PR.
+ */
+export function groupsUnder(parents: ParentMap, parent: string): Group[] {
+  return childrenOf(parents, parent).map(c => {
+    const chain = [c];
+    let kids = childrenOf(parents, c);
+    while (kids.length === 1) {
+      chain.push(kids[0]);
+      kids = childrenOf(parents, kids[0]);
+    }
+    return chain.length === 1 ? { type: 'single', branch: c } : { type: 'stack', chain };
+  });
+}
+
+/** Groups nested under a PR row: only when it forks (2+ PRs on top). */
+export function forkGroups(parents: ParentMap, branch: string): Group[] {
+  return childrenOf(parents, branch).length >= 2 ? groupsUnder(parents, branch) : [];
+}
+
+/** Put `moving` directly below `anchor` (between anchor and its parent). */
+export function planInsertBefore(parents: ParentMap, trunk: string, moving: string, anchor: string): MovePlan {
+  if (moving === anchor) throw new Error('Drop target is the same branch.');
+  if (!parents.has(moving) || !parents.has(anchor)) throw new Error('Unknown branch.');
+  const next: ParentMap = new Map(parents);
+  const oldParent = parents.get(moving)!;
+  for (const c of childrenOf(parents, moving)) next.set(c, oldParent);
+  next.delete(moving);
+  next.set(moving, next.get(anchor)!);
+  next.set(anchor, moving);
+  return finishPlan(parents, next, trunk);
+}
