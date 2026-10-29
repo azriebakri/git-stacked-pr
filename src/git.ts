@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { BranchInfo, PrInfo, sanitize } from './stack';
+import { mergeStats, parseNameStatusZ, parseNumstatZ, PrChanges } from './diff';
 
 export class CmdError extends Error {
   constructor(
@@ -267,6 +268,38 @@ export class Repo {
     }
     await git(wt, 'fetch', remote, branch);
     await git(wt, 'checkout', '--track', '-b', branch, `${remote}/${branch}`);
+  }
+
+  /** Local branch if it exists, else the remote-tracking ref. */
+  async resolveRef(name: string, remote: string): Promise<string> {
+    for (const ref of [`refs/heads/${name}`, `refs/remotes/${remote}/${name}`]) {
+      if (await gitOk(this.cwd, 'rev-parse', '--verify', '--quiet', ref)) return ref;
+    }
+    // remote-only PR branch that was never fetched
+    await git(this.cwd, 'fetch', remote, name).catch(() => undefined);
+    if (await gitOk(this.cwd, 'rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${name}`)) {
+      return `refs/remotes/${remote}/${name}`;
+    }
+    throw new Error(`Branch ${name} not found locally or on ${remote}.`);
+  }
+
+  /** Files changed by `branch` relative to where it forks from `parent` (i.e. just this PR's diff). */
+  async prChanges(branch: string, parent: string, remote: string): Promise<PrChanges> {
+    const [headRef, parentRef] = await Promise.all([this.resolveRef(branch, remote), this.resolveRef(parent, remote)]);
+    const head = await this.revParse(headRef);
+    const base = await this.mergeBase(parentRef, head);
+    const [ns, num] = await Promise.all([
+      git(this.cwd, 'diff', '--name-status', '-M', '-z', base, head),
+      git(this.cwd, 'diff', '--numstat', '-M', '-z', base, head),
+    ]);
+    const files = mergeStats(parseNameStatusZ(ns), parseNumstatZ(num));
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    return { base, head, files };
+  }
+
+  /** File content at a commit, or '' if it doesn't exist there. */
+  async show(ref: string, file: string): Promise<string> {
+    return run('git', ['show', `${ref}:${file}`], this.cwd).catch(() => '');
   }
 
   async stash(wt: string, message: string): Promise<void> {

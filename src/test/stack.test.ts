@@ -192,3 +192,36 @@ test('e2e: checkout local branch, remote-only branch, and detect branch held by 
   sh(main, 'checkout', '-q', 'main');
   assert.equal(await repo.currentBranch(main), 'main');
 });
+
+test('e2e: PR file changes are relative to the parent in the stack, with renames and stats', async () => {
+  const { main, wts } = makeRepo();
+  const repo = (await Repo.open(main))!;
+  // On C: modify, add, delete, rename, plus a binary file
+  fs.writeFileSync(path.join(wts.C, 'B.txt'), 'B\nmore\n');          // modify a file from B
+  fs.writeFileSync(path.join(wts.C, 'dir with space.txt'), 'x\n');   // add, with a space
+  sh(wts.C, 'rm', '-q', 'A.txt');                                    // delete
+  sh(wts.C, 'mv', 'base.txt', 'renamed.txt');                        // rename
+  fs.writeFileSync(path.join(wts.C, 'bin.dat'), Buffer.from([0, 1, 2, 0, 255]));
+  sh(wts.C, 'add', '-A');
+  sh(wts.C, 'commit', '-qm', 'more C');
+
+  const ch = await repo.prChanges('C', 'B', 'origin');
+  const by = Object.fromEntries(ch.files.map(f => [f.path, f]));
+  // C.txt comes from C's first commit; nothing from A or B leaks in
+  assert.deepEqual(Object.keys(by).sort(), ['A.txt', 'B.txt', 'C.txt', 'bin.dat', 'dir with space.txt', 'renamed.txt']);
+  assert.equal(by['A.txt'].status, 'D');
+  assert.equal(by['B.txt'].status, 'M');
+  assert.deepEqual([by['B.txt'].added, by['B.txt'].deleted], [1, 0]);
+  assert.equal(by['renamed.txt'].status, 'R');
+  assert.equal(by['renamed.txt'].oldPath, 'base.txt');
+  assert.equal(by['bin.dat'].added, undefined);
+  assert.equal(by['dir with space.txt'].status, 'A');
+  // contents for the diff sides
+  assert.equal(await repo.show(ch.base, 'B.txt'), 'B\n');
+  assert.equal(await repo.show(ch.head, 'B.txt'), 'B\nmore\n');
+  assert.equal(await repo.show(ch.base, 'dir with space.txt'), '');
+
+  // A PR with only its own single commit vs its parent
+  const a = await repo.prChanges('A', 'main', 'origin');
+  assert.deepEqual(a.files.map(f => `${f.status} ${f.path}`), ['A A.txt']);
+});

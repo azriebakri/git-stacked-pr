@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
-import { ghBin, Repo, setGhPath, snapshot } from './git';
-import { Node, StackTree } from './provider';
+import { ghBin, git, Repo, setGhPath, snapshot } from './git';
+import { FILE_SCHEME, FileStatusDecorations, Node, StackTree } from './provider';
+import * as fs from 'fs';
+import * as path from 'path';
 import { execute, Outcome, PendingRestack, preflight, resolveSteps, resume, Step } from './restack';
 import { describePlan, descendants, MovePlan, planMove, planMoveSubtree } from './stack';
 
@@ -12,7 +14,25 @@ export function activate(context: vscode.ExtensionContext) {
   const out = vscode.window.createOutputChannel('Stacked PRs');
 
   const cfg = () => vscode.workspace.getConfiguration('stackedPrs');
-  const tree = new StackTree((moving, target) => guarded(() => onDrop(moving, target)));
+  const tree = new StackTree((moving, target) => guarded(() => onDrop(moving, target)), {
+    repo: () => repo,
+    remote: () => cfg().get('remote', 'origin'),
+  });
+
+  // Read-only file contents at a commit, for the left/right sides of diffs.
+  const GIT_SCHEME = 'stackedprs-git';
+  const gitUri = (ref: string, file: string) =>
+    vscode.Uri.from({ scheme: GIT_SCHEME, path: '/' + file, query: JSON.stringify({ ref }) });
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(GIT_SCHEME, {
+      provideTextDocumentContent: async uri => {
+        if (!repo) return '';
+        const { ref } = JSON.parse(uri.query) as { ref: string };
+        return repo.show(ref, uri.path.slice(1));
+      },
+    }),
+    vscode.window.registerFileDecorationProvider(new FileStatusDecorations()),
+  );
   const view = vscode.window.createTreeView('stackedPrs.tree', {
     treeDataProvider: tree,
     dragAndDropController: tree,
@@ -256,6 +276,45 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.setStatusBarMessage(`$(git-branch) Checked out ${branch}`, 4000);
     }),
   );
+
+  reg('stackedPrs.openFileDiff', async (n?: Node) => {
+    if (!n || n.kind !== 'file') return;
+    const { change: f, changes } = n;
+    const parent = tree.snap?.parents.get(n.name) ?? 'parent';
+    const left = gitUri(changes.base, f.oldPath ?? f.path);
+    // Right side: the real file in the PR's worktree (editable) when it is there and still at the PR tip;
+    // otherwise the committed version.
+    const wt = tree.snap?.branches.get(n.name)?.worktree;
+    const onDisk = wt && f.status !== 'D' ? path.join(wt, f.path) : undefined;
+    const tipMatches = wt ? (await git(wt, 'rev-parse', 'HEAD').catch(() => '')) === changes.head : false;
+    const right = onDisk && tipMatches && fs.existsSync(onDisk) ? vscode.Uri.file(onDisk) : gitUri(changes.head, f.path);
+    const title = `${path.posix.basename(f.path)} (${parent} ↔ ${n.name})`;
+    await vscode.commands.executeCommand('vscode.diff', left, right, title, { preview: true });
+  });
+
+  reg('stackedPrs.openFileAtTip', async (n?: Node) => {
+    if (!n || n.kind !== 'file' || n.change.status === 'D') return;
+    const wt = tree.snap?.branches.get(n.name)?.worktree;
+    const uri = wt ? vscode.Uri.file(path.join(wt, n.change.path)) : gitUri(n.changes.head, n.change.path);
+    await vscode.window.showTextDocument(uri, { preview: true });
+  });
+
+  reg('stackedPrs.openAllChanges', async (n?: Node) => {
+    if (!n || (n.kind !== 'files' && n.kind !== 'branch')) return;
+    const changes = await tree.prChanges(n.name);
+    // Opens the multi-file diff editor where available (VS Code ≥ 1.86 / recent Cursor).
+    const resources = changes.files.map(f => [
+      gitUri(changes.head, f.path),
+      f.status === 'A' ? undefined : gitUri(changes.base, f.oldPath ?? f.path),
+      f.status === 'D' ? undefined : gitUri(changes.head, f.path),
+    ]);
+    const parent = tree.snap?.parents.get(n.name);
+    try {
+      await vscode.commands.executeCommand('vscode.changes', `${n.name} vs ${parent}`, resources);
+    } catch {
+      vscode.window.showWarningMessage('Your editor version has no multi-file diff view; open files one by one instead.');
+    }
+  });
 
   reg('stackedPrs.openWorktreeHere', (n?: Node) => {
     const b = branchArg(n);
