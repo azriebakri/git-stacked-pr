@@ -2,7 +2,7 @@
   "name": "stacked-prs",
   "displayName": "Stacked PRs",
   "description": "View stacked pull requests as a tree, drag and drop to reorder them, with each branch living in its own git worktree.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "local",
   "license": "MIT",
   "engines": {

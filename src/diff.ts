@@ -8,6 +8,8 @@ export interface FileChange {
   oldPath?: string;  // path on the parent side, for renames/copies
   added?: number;    // undefined for binary files
   deleted?: number;
+  /** Blob id on the PR side (parent side for deletions); changes whenever the file's content does. */
+  blob?: string;
 }
 
 export interface PrChanges {
@@ -69,4 +71,67 @@ export function totals(files: FileChange[]) {
     deleted += f.deleted ?? 0;
   }
   return { added, deleted };
+}
+
+/** `git diff --raw -M -z --no-abbrev`: like name-status, plus blob ids. */
+export function parseRawZ(out: string): FileChange[] {
+  const parts = out.split('\0');
+  const files: FileChange[] = [];
+  for (let i = 0; i < parts.length; ) {
+    const meta = parts[i++];
+    if (!meta || meta[0] !== ':') continue;
+    // :<srcmode> <dstmode> <srcsha> <dstsha> <status>[score]
+    const [, , srcSha, dstSha, code] = meta.slice(1).split(' ');
+    const status = code[0] as ChangeStatus;
+    const blob = status === 'D' ? srcSha : dstSha;
+    if (status === 'R' || status === 'C') {
+      const oldPath = parts[i++];
+      files.push({ status, path: parts[i++], oldPath, blob });
+    } else {
+      files.push({ status, path: parts[i++], blob });
+    }
+  }
+  return files;
+}
+
+// ---- folder tree for the Files changed list ----
+
+export interface FolderEntry {
+  /** Full directory path, e.g. "src/data/productCatalogue". */
+  dir: string;
+  /** Label shown: single-child folder chains are compressed ("src/data/productCatalogue"). */
+  label: string;
+  folders: FolderEntry[];
+  files: FileChange[];
+}
+
+export function buildFileTree(files: FileChange[]): FolderEntry {
+  const root: FolderEntry = { dir: '', label: '', folders: [], files: [] };
+  for (const f of files) {
+    const segs = f.path.split('/');
+    let cur = root;
+    for (const seg of segs.slice(0, -1)) {
+      const dir = cur.dir ? `${cur.dir}/${seg}` : seg;
+      let next = cur.folders.find(x => x.dir === dir);
+      if (!next) cur.folders.push((next = { dir, label: seg, folders: [], files: [] }));
+      cur = next;
+    }
+    cur.files.push(f);
+  }
+  const compress = (e: FolderEntry): FolderEntry => {
+    e.folders = e.folders.map(compress);
+    // merge a folder whose only content is one sub-folder
+    while (e !== root && e.files.length === 0 && e.folders.length === 1) {
+      const only = e.folders[0];
+      e = { ...only, label: `${e.label}/${only.label}` };
+    }
+    e.folders.sort((a, b) => a.label.localeCompare(b.label));
+    e.files.sort((a, b) => a.path.localeCompare(b.path));
+    return e;
+  };
+  return compress(root);
+}
+
+export function filesUnder(e: FolderEntry): FileChange[] {
+  return [...e.files, ...e.folders.flatMap(filesUnder)];
 }

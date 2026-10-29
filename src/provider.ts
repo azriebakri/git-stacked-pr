@@ -1,13 +1,15 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { Repo, Snapshot } from './git';
-import { FileChange, PrChanges, totals } from './diff';
+import { buildFileTree, FileChange, filesUnder, FolderEntry, PrChanges, totals } from './diff';
+import { ViewedStore } from './viewed';
 import { BranchInfo, childrenOf, isForeign, roots } from './stack';
 
 export type Node =
   | { kind: 'root'; name: string }
   | { kind: 'branch'; name: string; info: BranchInfo }
   | { kind: 'files'; name: string } // name = branch
+  | { kind: 'folder'; name: string; entry: FolderEntry; changes: PrChanges } // name = branch
   | { kind: 'file'; name: string; change: FileChange; changes: PrChanges } // name = branch
   | { kind: 'note'; name: string; text: string; error?: boolean }; // name = branch
 
@@ -33,6 +35,8 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
   private changes = new Map<string, Promise<PrChanges>>();
   private loaded = new Map<string, PrChanges | Error>();
   private filesNodes = new Map<string, Node>();
+  private trees = new Map<string, FolderEntry>();
+  private synced = new Set<string>();
 
   private filesNode(branch: string): Node {
     let n = this.filesNodes.get(branch);
@@ -42,7 +46,7 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
 
   constructor(
     private readonly onDropBranch: (moving: string, target: string) => Promise<void>,
-    private readonly ctx: { repo: () => Repo | undefined; remote: () => string },
+    private readonly ctx: { repo: () => Repo | undefined; remote: () => string; viewed: ViewedStore },
   ) {}
 
   set(snap: Snapshot | undefined) {
@@ -51,7 +55,21 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
     this.changes.clear();
     this.loaded.clear();
     this.filesNodes.clear();
+    this.trees.clear();
+    this.synced.clear();
     this.emitter.fire(undefined);
+  }
+
+  /** Re-render one PR's Files changed node (counts + checkboxes). */
+  refreshFiles(branch: string) {
+    this.emitter.fire(this.filesNode(branch));
+  }
+
+  private entryNodes(branch: string, e: FolderEntry, changes: PrChanges): Node[] {
+    return [
+      ...e.folders.map(entry => ({ kind: 'folder' as const, name: branch, entry, changes })),
+      ...e.files.map(change => ({ kind: 'file' as const, name: branch, change, changes })),
+    ];
   }
 
   /** Diff of one PR against its parent in the stack (cached until the next refresh). */
@@ -93,11 +111,23 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
       try {
         const changes = await this.prChanges(el.name);
         if (!changes.files.length) return [{ kind: 'note', name: el.name, text: 'No changes against parent' }];
-        return changes.files.map(change => ({ kind: 'file', name: el.name, change, changes }));
+        let tree = this.trees.get(el.name);
+        if (!tree) this.trees.set(el.name, (tree = buildFileTree(changes.files)));
+        // Pull GitHub's "Viewed" ticks once per refresh, then re-render if they differ.
+        const pr = this.snap.branches.get(el.name)?.pr;
+        if (pr && !this.synced.has(el.name)) {
+          this.synced.add(el.name);
+          const snap = this.snap;
+          void this.ctx.viewed.sync(el.name, pr.number, changes.files).then(changed => {
+            if (changed && this.snap === snap) this.refreshFiles(el.name);
+          });
+        }
+        return this.entryNodes(el.name, tree, changes);
       } catch (e: any) {
         return [{ kind: 'note', name: el.name, text: `Couldn't load changes: ${e?.message ?? e}`, error: true }];
       }
     }
+    if (el.kind === 'folder') return this.entryNodes(el.name, el.entry, el.changes);
     if (el.kind === 'file' || el.kind === 'note') return [];
     const kids = childrenOf(this.snap.parents, el.name).map(c => this.node(c));
     return el.kind === 'branch' ? [this.filesNode(el.name), ...kids] : kids;
@@ -105,7 +135,7 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
 
   getParent(el: Node): Node | undefined {
     if (el.kind === 'files') return this.node(el.name);
-    if (el.kind === 'file' || el.kind === 'note') return this.filesNode(el.name);
+    if (el.kind === 'file' || el.kind === 'note' || el.kind === 'folder') return this.filesNode(el.name);
     const p = this.snap?.parents.get(el.name);
     return p ? this.node(p) : undefined;
   }
@@ -113,6 +143,7 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
   getTreeItem(el: Node): vscode.TreeItem {
     if (el.kind === 'files') return this.filesItem(el.name);
     if (el.kind === 'file') return this.fileItem(el);
+    if (el.kind === 'folder') return this.folderItem(el);
     if (el.kind === 'note') {
       const item = new vscode.TreeItem(el.text, vscode.TreeItemCollapsibleState.None);
       item.iconPath = new vscode.ThemeIcon(el.error ? 'error' : 'info');
@@ -201,20 +232,42 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
       item.description = 'error';
     } else {
       const t = totals(res.files);
-      item.description = `${res.files.length} file${res.files.length === 1 ? '' : 's'} · +${t.added} −${t.deleted}`;
+      const seen = this.ctx.viewed.countViewed(branch, res.files);
+      item.description = `${seen}/${res.files.length} viewed · +${t.added} −${t.deleted}`;
+      if (res.files.length && seen === res.files.length) item.iconPath = new vscode.ThemeIcon('pass', new vscode.ThemeColor('testing.iconPassed'));
     }
+    return item;
+  }
+
+  private check(viewed: boolean, what: string): vscode.TreeItemCheckboxState | { state: vscode.TreeItemCheckboxState; tooltip: string } {
+    return {
+      state: viewed ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked,
+      tooltip: viewed ? `Mark ${what} as not viewed` : `Mark ${what} as viewed`,
+    };
+  }
+
+  private folderItem(el: Extract<Node, { kind: 'folder' }>): vscode.TreeItem {
+    const item = new vscode.TreeItem(el.entry.label, vscode.TreeItemCollapsibleState.Expanded);
+    item.id = `folder:${el.name}:${el.entry.dir}`;
+    item.iconPath = vscode.ThemeIcon.Folder;
+    item.resourceUri = vscode.Uri.from({ scheme: 'stackedprs-folder', path: '/' + el.entry.dir });
+    const files = filesUnder(el.entry);
+    const seen = this.ctx.viewed.countViewed(el.name, files);
+    item.checkboxState = this.check(seen === files.length, 'every file in this folder');
+    item.description = seen && seen < files.length ? `${seen}/${files.length}` : undefined;
+    item.tooltip = el.entry.dir;
+    item.contextValue = 'folder';
     return item;
   }
 
   private fileItem(el: Extract<Node, { kind: 'file' }>): vscode.TreeItem {
     const f = el.change;
     const name = path.posix.basename(f.path);
-    const dir = path.posix.dirname(f.path);
     const item = new vscode.TreeItem(name, vscode.TreeItemCollapsibleState.None);
     item.id = `file:${el.name}:${f.path}`;
     item.resourceUri = vscode.Uri.from({ scheme: FILE_SCHEME, path: '/' + f.path, query: f.status });
+    item.checkboxState = this.check(this.ctx.viewed.isViewed(el.name, f), 'this file');
     const bits: string[] = [];
-    if (dir !== '.') bits.push(dir);
     if (f.oldPath) bits.push(`← ${f.oldPath}`);
     if (f.added !== undefined) bits.push(`+${f.added} −${f.deleted}`);
     else bits.push('binary');

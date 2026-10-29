@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { BranchInfo, PrInfo, sanitize, Scope } from './stack';
-import { mergeStats, parseNameStatusZ, parseNumstatZ, PrChanges } from './diff';
+import { mergeStats, parseNumstatZ, parseRawZ, PrChanges } from './diff';
 
 export class CmdError extends Error {
   constructor(
@@ -289,10 +289,10 @@ export class Repo {
     const head = await this.revParse(headRef);
     const base = await this.mergeBase(parentRef, head);
     const [ns, num] = await Promise.all([
-      git(this.cwd, 'diff', '--name-status', '-M', '-z', base, head),
+      git(this.cwd, 'diff', '--raw', '--no-abbrev', '-M', '-z', base, head),
       git(this.cwd, 'diff', '--numstat', '-M', '-z', base, head),
     ]);
-    const files = mergeStats(parseNameStatusZ(ns), parseNumstatZ(num));
+    const files = mergeStats(parseRawZ(ns), parseNumstatZ(num));
     files.sort((a, b) => a.path.localeCompare(b.path));
     return { base, head, files };
   }
@@ -300,6 +300,34 @@ export class Repo {
   /** File content at a commit, or '' if it doesn't exist there. */
   async show(ref: string, file: string): Promise<string> {
     return run('git', ['show', `${ref}:${file}`], this.cwd).catch(() => '');
+  }
+
+  /** GitHub's per-file "Viewed" checkboxes for the signed-in user on a PR. */
+  async prViewedState(prNumber: number): Promise<{ prId: string; files: Map<string, string> }> {
+    const query = `query($owner:String!,$name:String!,$number:Int!,$after:String){
+      repository(owner:$owner,name:$name){ pullRequest(number:$number){ id
+        files(first:100,after:$after){ nodes{ path viewerViewedState } pageInfo{ hasNextPage endCursor } } } } }`;
+    const files = new Map<string, string>();
+    let prId = '';
+    let after: string | undefined;
+    for (let page = 0; page < 30; page++) {
+      const args = ['api', 'graphql', '-F', 'owner={owner}', '-F', 'name={repo}', '-F', `number=${prNumber}`, '-f', `query=${query}`];
+      if (after) args.push('-f', `after=${after}`);
+      const res = JSON.parse(await run(await ghBin(), args, this.cwd));
+      const pr = res?.data?.repository?.pullRequest;
+      if (!pr) throw new Error(`PR #${prNumber} not found`);
+      prId = pr.id;
+      for (const n of pr.files.nodes) files.set(n.path, n.viewerViewedState);
+      if (!pr.files.pageInfo.hasNextPage) break;
+      after = pr.files.pageInfo.endCursor;
+    }
+    return { prId, files };
+  }
+
+  async setPrFileViewed(prId: string, file: string, viewed: boolean): Promise<void> {
+    const op = viewed ? 'markFileAsViewed' : 'unmarkFileAsViewed';
+    const query = `mutation($id:ID!,$path:String!){ ${op}(input:{pullRequestId:$id,path:$path}){ clientMutationId } }`;
+    await run(await ghBin(), ['api', 'graphql', '-f', `id=${prId}`, '-f', `path=${file}`, '-f', `query=${query}`], this.cwd);
   }
 
   async stash(wt: string, message: string): Promise<void> {

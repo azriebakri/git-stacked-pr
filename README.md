@@ -12,7 +12,7 @@ main                       trunk
 ## Install
 
 ```bash
-cursor --install-extension stacked-prs-0.1.4.vsix
+cursor --install-extension stacked-prs-0.1.5.vsix
 ```
 or in Cursor: Command Palette → **Extensions: Install from VSIX…**
 
@@ -29,6 +29,7 @@ Open any worktree of the repo (main checkout or a branch worktree) and click the
 | Move a whole sub-stack | Right-click → **Move onto…** → "This PR and everything stacked on it". |
 | Checkout a branch | Right-click → **Checkout Branch** checks it out in the worktree open in this window (offers to stash uncommitted changes). If the branch already lives in another worktree, it offers to open that worktree instead, since git allows a branch in only one worktree at a time. |
 | See a PR's files | Expand **Files changed** under a PR: only that PR's changes compared with the branch below it in the stack, with A/M/D/R badges and +/− counts. Click a file for a side-by-side diff (the right side is the editable file in the PR's worktree). The ⧉ button on **Files changed** opens all of them in one multi-file diff. |
+| Viewed checklist | Tick files (or a whole folder) under **Files changed** as you review; the node shows `3/12 viewed`. A file unticks itself when its content changes. For PRs, ticks sync both ways with GitHub's "Viewed" checkboxes — including on teammates' PRs, since that state is per reviewer. |
 | Open the branch | Inline ⧉ button opens its worktree in a new Cursor window; ▸_ opens a terminal there. |
 | Branch with no worktree | Inline **+** creates one in `<repo>.worktrees/<branch>`. |
 | After amending a lower PR | Right-click → **Restack Descendants**. |
@@ -91,6 +92,7 @@ Press F5 in Cursor with this folder open to run an Extension Development Host.
 - `src/stack.ts` — pure stack model and move planning (unit tested)
 - `src/git.ts` — git / worktree / `gh` access
 - `src/diff.ts` — parsing `git diff` output for the Files changed list
+- `src/viewed.ts` — viewed checklist (local + GitHub sync)
 - `src/restack.ts` — ordered rebase execution, conflict pause/resume
 - `src/provider.ts` — tree view + drag-and-drop controller
 - `src/extension.ts` — commands and wiring

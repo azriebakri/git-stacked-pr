@@ -292,3 +292,90 @@ test('e2e: scope filter and ownership come from gh (fake gh)', async () => {
     setGhPath('');
   }
 });
+
+// ---------- viewed checklist ----------
+import { buildFileTree, FileChange, filesUnder, parseRawZ } from '../diff';
+import { ViewedStore } from '../viewed';
+
+test('raw diff parsing carries blob ids, including renames and deletes', () => {
+  const z = [
+    ':100644 100644 aaa bbb M', 'src/x.ts',
+    ':100644 000000 ccc 000 D', 'gone.ts',
+    ':100644 100644 ddd eee R087', 'old name.ts', 'new name.ts',
+    '',
+  ].join('\0');
+  assert.deepEqual(parseRawZ(z), [
+    { status: 'M', path: 'src/x.ts', blob: 'bbb' },
+    { status: 'D', path: 'gone.ts', blob: 'ccc' },
+    { status: 'R', path: 'new name.ts', oldPath: 'old name.ts', blob: 'eee' },
+  ]);
+});
+
+test('file tree compresses single-folder chains like the screenshot', () => {
+  const f = (p: string): FileChange => ({ status: 'M', path: p });
+  const t = buildFileTree([f('src/data/productCatalogue/addOnsCatalogueData.ts'), f('README.md'), f('src/app/a.ts'), f('src/app/b.ts'), f('src/data/x/y.ts')]);
+  const show = (e: typeof t, d = 0): string[] => [
+    ...e.folders.flatMap(x => [`${'  '.repeat(d)}${x.label}/`, ...show(x, d + 1)]),
+    ...e.files.map(x => `${'  '.repeat(d)}${x.path.split('/').pop()}`),
+  ];
+  assert.deepEqual(show(t), [
+    'src/', '  app/', '    a.ts', '    b.ts', '  data/', '    productCatalogue/', '      addOnsCatalogueData.ts', '    x/', '      y.ts', 'README.md',
+  ]);
+  const single = buildFileTree([f('src/data/productCatalogue/addOnsCatalogueData.ts')]);
+  assert.equal(single.folders[0].label, 'src/data/productCatalogue');
+  assert.equal(single.folders[0].dir, 'src/data/productCatalogue');
+  assert.equal(filesUnder(t).length, 5);
+});
+
+function memKV() {
+  const m = new Map<string, unknown>();
+  return { get: <T>(k: string) => m.get(k) as T | undefined, update: async (k: string, v: unknown) => void m.set(k, v) };
+}
+
+test('viewed: unticks itself when the file content changes', async () => {
+  const v = new ViewedStore(memKV(), () => undefined);
+  const a1: FileChange = { status: 'M', path: 'a.ts', blob: 'v1' };
+  await v.set('feat', [a1], true);
+  assert.equal(v.isViewed('feat', a1), true);
+  assert.equal(v.isViewed('feat', { ...a1, blob: 'v2' }), false); // new push changed it
+  assert.equal(v.isViewed('other-branch', a1), false);
+  await v.set('feat', [a1], false);
+  assert.equal(v.isViewed('feat', a1), false);
+});
+
+test('viewed: syncs both ways with GitHub', async () => {
+  const marked: string[] = [];
+  const remote = new Map([['a.ts', 'VIEWED'], ['b.ts', 'UNVIEWED'], ['c.ts', 'DISMISSED']]);
+  const gh = {
+    prViewedState: async () => ({ prId: 'PR_1', files: new Map(remote) }),
+    setPrFileViewed: async (id: string, p: string, on: boolean) => void marked.push(`${id} ${p} ${on}`),
+  };
+  const v = new ViewedStore(memKV(), () => gh);
+  const files: FileChange[] = ['a.ts', 'b.ts', 'c.ts', 'local-only.ts'].map(p => ({ status: 'M', path: p, blob: 'x' }));
+  // c.ts was ticked here earlier; GitHub has since dismissed it (changed on GitHub)
+  await v.set('feat', [files[2]], true);
+  marked.length = 0;
+
+  assert.equal(await v.sync('feat', 7, files), true);
+  assert.deepEqual(files.map(f => v.isViewed('feat', f)), [true, false, false, false]);
+
+  await v.set('feat', [files[1], files[3]], true, 7);
+  assert.deepEqual(marked, ['PR_1 b.ts true']); // local-only.ts isn't in the GitHub PR diff
+  assert.deepEqual(files.map(f => v.isViewed('feat', f)), [true, true, false, true]);
+});
+
+test('e2e: blob ids change only for files whose content changed', async () => {
+  const { main, wts } = makeRepo();
+  const repo = (await Repo.open(main))!;
+  fs.writeFileSync(path.join(wts.C, 'D.txt'), 'd\n');
+  sh(wts.C, 'add', '.');
+  sh(wts.C, 'commit', '-qm', 'D');
+  const before = await repo.prChanges('C', 'B', 'origin');
+  fs.writeFileSync(path.join(wts.C, 'D.txt'), 'd2\n');
+  sh(wts.C, 'commit', '-qam', 'D2');
+  const after = await repo.prChanges('C', 'B', 'origin');
+  const blob = (c: typeof before, p: string) => c.files.find(f => f.path === p)!.blob;
+  assert.equal(blob(before, 'C.txt'), blob(after, 'C.txt'));
+  assert.notEqual(blob(before, 'D.txt'), blob(after, 'D.txt'));
+  assert.match(blob(after, 'D.txt')!, /^[0-9a-f]{40,64}$/);
+});

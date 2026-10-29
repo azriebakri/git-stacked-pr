@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { ghBin, git, Repo, setGhPath, snapshot } from './git';
-import { FILE_SCHEME, FileStatusDecorations, Node, StackTree } from './provider';
+import { FileStatusDecorations, Node, StackTree } from './provider';
+import { ViewedStore } from './viewed';
+import { filesUnder } from './diff';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execute, Outcome, PendingRestack, preflight, resolveSteps, resume, Step } from './restack';
@@ -11,12 +13,13 @@ const PENDING_KEY = 'stackedPrs.pending';
 export function activate(context: vscode.ExtensionContext) {
   let repo: Repo | undefined;
   let busy = false;
-  const out = vscode.window.createOutputChannel('Stacked PRs');
-
   const cfg = () => vscode.workspace.getConfiguration('stackedPrs');
+  const out = vscode.window.createOutputChannel('Stacked PRs');
+  const viewed = new ViewedStore(context.workspaceState, () => repo, m => out.appendLine(m));
   const tree = new StackTree((moving, target) => guarded(() => onDrop(moving, target)), {
     repo: () => repo,
     remote: () => cfg().get('remote', 'origin'),
+    viewed,
   });
 
   // Read-only file contents at a commit, for the left/right sides of diffs.
@@ -37,7 +40,27 @@ export function activate(context: vscode.ExtensionContext) {
     treeDataProvider: tree,
     dragAndDropController: tree,
     showCollapseAll: true,
+    manageCheckboxStateManually: true, // folder ticks fan out to their files ourselves
   });
+
+  // "Viewed" checklist: ticking a folder ticks every file under it.
+  context.subscriptions.push(
+    view.onDidChangeCheckboxState(async e => {
+      const byBranch = new Map<string, { files: Map<string, import('./diff').FileChange>; checked: boolean }[]>();
+      for (const [node, state] of e.items) {
+        if (node.kind !== 'file' && node.kind !== 'folder') continue;
+        const files = node.kind === 'file' ? [node.change] : filesUnder(node.entry);
+        const list = byBranch.get(node.name) ?? [];
+        list.push({ files: new Map(files.map(f => [f.path, f])), checked: state === vscode.TreeItemCheckboxState.Checked });
+        byBranch.set(node.name, list);
+      }
+      for (const [branch, groups] of byBranch) {
+        const pr = tree.snap?.branches.get(branch)?.pr;
+        for (const g of groups) await viewed.set(branch, [...g.files.values()], g.checked, pr?.number);
+        tree.refreshFiles(branch);
+      }
+    }),
+  );
   context.subscriptions.push(view, out);
 
   const worktreeOf = (b: string) => tree.snap?.branches.get(b)?.worktree;
