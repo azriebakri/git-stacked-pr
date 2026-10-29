@@ -211,6 +211,52 @@ export function activate(context: vscode.ExtensionContext) {
     const b = branchArg(n);
     if (b.info.worktree) openFolder(b.info.worktree, true);
   });
+  reg('stackedPrs.checkout', (n?: Node) =>
+    guarded(async () => {
+      const sel = n ?? view.selection[0];
+      if (!sel || !repo) throw new Error('Select a branch first.');
+      const branch = sel.name;
+      const here = repo.cwd;
+
+      if ((await repo.currentBranch(here)) === branch) {
+        vscode.window.showInformationMessage(`Already on ${branch}.`);
+        return;
+      }
+
+      // git allows a branch in only one worktree at a time.
+      const holder = (await repo.worktrees()).find(w => w.branch === branch);
+      if (holder) {
+        const pick = await vscode.window.showInformationMessage(
+          `${branch} is checked out in another worktree:\n${holder.path}`,
+          { modal: true, detail: 'A branch can only be checked out in one worktree at a time. Open that worktree instead?' },
+          'Open in This Window',
+          'Open in New Window',
+        );
+        if (pick) openFolder(holder.path, pick === 'Open in New Window');
+        return;
+      }
+
+      if (await repo.isRebasing(here)) throw new Error('This worktree is in the middle of a rebase. Finish or abort it first.');
+
+      if (await repo.isDirty(here)) {
+        const pick = await vscode.window.showWarningMessage(
+          `You have uncommitted changes in this worktree.`,
+          { modal: true, detail: `Stash them before checking out ${branch}, or carry them over (git refuses if they conflict).` },
+          'Stash & Checkout',
+          'Checkout Anyway',
+        );
+        if (!pick) return;
+        if (pick === 'Stash & Checkout') {
+          await repo.stash(here, `stacked-prs: before checkout ${branch}`);
+          out.appendLine(`Stashed changes in ${here}`);
+        }
+      }
+
+      await repo.checkout(here, branch, cfg().get('remote', 'origin'));
+      vscode.window.setStatusBarMessage(`$(git-branch) Checked out ${branch}`, 4000);
+    }),
+  );
+
   reg('stackedPrs.openWorktreeHere', (n?: Node) => {
     const b = branchArg(n);
     if (b.info.worktree) openFolder(b.info.worktree, false);

@@ -254,6 +254,25 @@ export class Repo {
     await git(wt, 'rebase', '--abort');
   }
 
+  async currentBranch(wt: string = this.cwd): Promise<string | undefined> {
+    const b = await git(wt, 'branch', '--show-current').catch(() => '');
+    return b || undefined;
+  }
+
+  /** Check out `branch` in worktree `wt`, creating a local tracking branch from `remote` if needed. */
+  async checkout(wt: string, branch: string, remote: string): Promise<void> {
+    if ((await this.localBranches()).has(branch)) {
+      await git(wt, 'checkout', branch);
+      return;
+    }
+    await git(wt, 'fetch', remote, branch);
+    await git(wt, 'checkout', '--track', '-b', branch, `${remote}/${branch}`);
+  }
+
+  async stash(wt: string, message: string): Promise<void> {
+    await git(wt, 'stash', 'push', '--include-untracked', '-m', message);
+  }
+
   async pushForce(remote: string, branch: string): Promise<void> {
     await git(this.cwd, 'push', '--force-with-lease', remote, `${branch}:${branch}`);
   }
@@ -276,6 +295,8 @@ export class Repo {
 }
 
 export interface Snapshot {
+  /** Branch checked out in the worktree open in this window. */
+  current?: string;
   trunk: string;
   branches: Map<string, BranchInfo>;
   parents: Map<string, string>;
@@ -286,7 +307,12 @@ export interface Snapshot {
 /** Collect everything the tree needs: worktrees, PRs, stored parents. */
 export async function snapshot(repo: Repo, cfg: { trunk: string; prAuthor: string }): Promise<Snapshot> {
   const trunk = await repo.detectTrunk(cfg.trunk);
-  const [wts, stored, locals] = await Promise.all([repo.worktrees(), repo.storedParents(), repo.localBranches()]);
+  const [wts, stored, locals, current] = await Promise.all([
+    repo.worktrees(),
+    repo.storedParents(),
+    repo.localBranches(),
+    repo.currentBranch(),
+  ]);
 
   let prs: PrInfo[] = [];
   let ghError: string | undefined;
@@ -326,5 +352,5 @@ export async function snapshot(repo: Repo, cfg: { trunk: string; prAuthor: strin
     }),
   );
 
-  return { trunk, branches, parents: sanitize(parents, trunk), ghError, ghErrorDetail };
+  return { trunk, branches, parents: sanitize(parents, trunk), ghError, ghErrorDetail, current };
 }

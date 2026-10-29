@@ -60,7 +60,9 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
       item.id = `root:${el.name}`;
       item.iconPath = new vscode.ThemeIcon(el.name === this.snap?.trunk ? 'git-branch' : 'git-merge');
       item.description = el.name === this.snap?.trunk ? 'trunk' : 'base';
-      item.contextValue = 'root';
+      const isCurrent = el.name === this.snap?.current;
+      if (isCurrent) item.description += ' · ✓ checked out here';
+      item.contextValue = isCurrent ? 'root current' : 'root';
       item.tooltip = 'Drop a PR here to put it directly on top of this branch.';
       return item;
     }
@@ -74,6 +76,8 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
     item.id = `branch:${info.name}`;
 
     const bits: string[] = [];
+    const isCurrent = info.name === this.snap?.current;
+    if (isCurrent) bits.push('✓ checked out here');
     if (pr) bits.push(info.name);
     if (info.rebasing) bits.push('⚠ rebasing');
     else if (info.dirty) bits.push('● modified');
@@ -91,6 +95,7 @@ export class StackTree implements vscode.TreeDataProvider<Node>, vscode.TreeDrag
         : new vscode.ThemeIcon('git-branch');
 
     const ctx = ['branch'];
+    if (isCurrent) ctx.push('current');
     ctx.push(info.worktree ? 'hasWorktree' : 'noWorktree');
     if (pr) ctx.push('hasPr');
     if (baseOutOfSync) ctx.push('baseOutOfSync');

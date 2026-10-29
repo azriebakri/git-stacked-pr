@@ -2,7 +2,7 @@
   "name": "stacked-prs",
   "displayName": "Stacked PRs",
   "description": "View stacked pull requests as a tree, drag and drop to reorder them, with each branch living in its own git worktree.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -49,6 +49,12 @@
         "command": "stackedPrs.refresh",
         "title": "Refresh",
         "icon": "$(refresh)",
+        "category": "Stacked PRs"
+      },
+      {
+        "command": "stackedPrs.checkout",
+        "title": "Checkout Branch",
+        "icon": "$(check)",
         "category": "Stacked PRs"
       },
       {
@@ -133,6 +139,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "stackedPrs.checkout",
+          "when": "view == stackedPrs.tree && viewItem =~ /^(branch|root)/ && viewItem !~ /current/",
+          "group": "0_checkout@1"
+        },
         {
           "command": "stackedPrs.openWorktree",
           "when": "view == stackedPrs.tree && viewItem =~ /hasWorktree/",
@@ -227,6 +238,10 @@
         },
         {
           "command": "stackedPrs.abortRebase",
+          "when": "false"
+        },
+        {
+          "command": "stackedPrs.checkout",
           "when": "false"
         }
       ]

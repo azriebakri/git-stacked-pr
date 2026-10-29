@@ -159,3 +159,36 @@ test('e2e: conflict pauses, resume continues after manual --continue', async () 
   sh(main, 'merge-base', '--is-ancestor', 'A', 'C');
   assert.equal((await repo.storedParents()).get('B')?.parentSha, sh(main, 'rev-parse', 'C'));
 });
+
+test('e2e: checkout local branch, remote-only branch, and detect branch held by another worktree', async () => {
+  const { main, wts } = makeRepo();
+  const repo = (await Repo.open(main))!;
+
+  // A free local branch
+  sh(main, 'branch', 'free', 'A');
+  await repo.checkout(main, 'free', 'origin');
+  assert.equal(await repo.currentBranch(main), 'free');
+
+  // Remote-only branch: clone, then check out a branch that only exists on origin
+  const clone = path.join(path.dirname(main), 'clone');
+  execFileSync('git', ['clone', '-q', main, clone]);
+  const cloneRepo = (await Repo.open(clone))!;
+  assert.equal((await cloneRepo.localBranches()).has('B'), false);
+  await cloneRepo.checkout(clone, 'B', 'origin');
+  assert.equal(await cloneRepo.currentBranch(clone), 'B');
+  assert.equal(sh(clone, 'rev-parse', '--abbrev-ref', 'B@{upstream}'), 'origin/B');
+
+  // Branch held by another worktree is reported by worktrees(), and git refuses it
+  const holder = (await repo.worktrees()).find(w => w.branch === 'C');
+  assert.equal(holder && fs.realpathSync(holder.path), fs.realpathSync(wts.C));
+  await assert.rejects(repo.checkout(main, 'C', 'origin'));
+
+  // Stash path
+  fs.writeFileSync(path.join(main, 'base.txt'), 'dirty\n');
+  assert.equal(await repo.isDirty(main), true);
+  await repo.stash(main, 'test');
+  assert.equal(await repo.isDirty(main), false);
+  await repo.checkout(main, 'A', 'origin').catch(() => {}); // A is held by wt-A; ignore
+  sh(main, 'checkout', '-q', 'main');
+  assert.equal(await repo.currentBranch(main), 'main');
+});

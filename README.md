@@ -12,7 +12,7 @@ main                       trunk
 ## Install
 
 ```bash
-cursor --install-extension stacked-prs-0.1.1.vsix
+cursor --install-extension stacked-prs-0.1.2.vsix
 ```
 or in Cursor: Command Palette → **Extensions: Install from VSIX…**
 
@@ -27,6 +27,7 @@ Open any worktree of the repo (main checkout or a branch worktree) and click the
 | Reorder | Drag a PR onto another PR. It is placed directly on top of the drop target. |
 | Move to bottom of stack | Drag onto `main` (or empty space). |
 | Move a whole sub-stack | Right-click → **Move onto…** → "This PR and everything stacked on it". |
+| Checkout a branch | Right-click → **Checkout Branch** checks it out in the worktree open in this window (offers to stash uncommitted changes). If the branch already lives in another worktree, it offers to open that worktree instead, since git allows a branch in only one worktree at a time. |
 | Open the branch | Inline ⧉ button opens its worktree in a new Cursor window; ▸_ opens a terminal there. |
 | Branch with no worktree | Inline **+** creates one in `<repo>.worktrees/<branch>`. |
 | After amending a lower PR | Right-click → **Restack Descendants**. |
